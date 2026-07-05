@@ -1,5 +1,7 @@
 # Flash Idea 闪念
 
+![Flash Idea 闪念项目封面](docs/assets/readme-cover.png)
+
 Flash Idea 是一款面向“灵感捕捉、AI 整理、知识关联、行动转化”的 Android 应用。它不是普通笔记本，也不是单一聊天机器人，而是一个把用户的零散想法转化为可验证计划、关联图谱和可导出结论的 Agent 工作台。
 
 当前仓库是 Flash Idea 复赛最终版的干净交付包：包含 Android 源码、可安装 APK、源码压缩包，以及面向演示和二次开发的说明。
