@@ -180,7 +180,7 @@ local.properties.example -> local.properties
 
 `local.properties` 已被 Git 忽略。不要把 AppID、API Key、模型密钥提交到仓库。
 
-## 给队友和 Agent 的阅读路径
+## 给开发者和 Agent 的阅读路径
 
 如果你要快速理解项目，用这个顺序：
 
