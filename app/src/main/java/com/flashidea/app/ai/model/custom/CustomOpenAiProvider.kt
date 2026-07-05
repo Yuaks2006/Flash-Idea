@@ -4,11 +4,16 @@ import com.flashidea.app.ai.model.AiMessage
 import com.flashidea.app.ai.model.AiModelProvider
 import com.flashidea.app.ai.model.AiModelRequest
 import com.flashidea.app.ai.model.AiModelResponse
+import com.flashidea.app.ai.model.AiModelStreamChunk
 import com.flashidea.app.ai.model.ModelProviderId
 import com.flashidea.app.ai.model.ModelRuntimeStatus
 import com.flashidea.app.ai.model.config.ModelPreferenceRepository
 import com.google.gson.Gson
+import com.google.gson.JsonParser
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -92,6 +97,92 @@ class CustomOpenAiProvider @Inject constructor(
                     success = content.isNotBlank()
                 )
             }
+        }
+    }
+
+    override fun supportsStreaming(): Boolean = true
+
+    override fun stream(request: AiModelRequest): Flow<AiModelStreamChunk> = flow {
+        val config = preferences.config.first().customModel
+        if (!config.isUsable()) {
+            emit(AiModelStreamChunk.Error(IllegalStateException("自定义模型未配置")))
+            return@flow
+        }
+
+        try {
+            val bodyJson = gson.toJson(
+                ChatRequest(
+                    model = config.modelName,
+                    messages = request.messages,
+                    stream = true,
+                    temperature = request.temperature,
+                    max_tokens = request.maxTokens
+                )
+            )
+
+            val httpRequest = Request.Builder()
+                .url(config.normalizedBaseUrl() + "chat/completions")
+                .addHeader("Authorization", "Bearer ${config.apiKey}")
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Accept", "text/event-stream")
+                .post(bodyJson.toRequestBody("application/json".toMediaType()))
+                .build()
+
+            val accumulated = StringBuilder()
+            okHttpClient.newCall(httpRequest).execute().use { response ->
+                if (!response.isSuccessful) {
+                    emit(
+                        AiModelStreamChunk.Error(
+                            IllegalStateException("自定义模型流式请求失败：HTTP ${response.code}")
+                        )
+                    )
+                    return@use
+                }
+                val source = response.body?.source() ?: run {
+                    emit(AiModelStreamChunk.Error(IllegalStateException("响应体为空")))
+                    return@use
+                }
+                while (!source.exhausted()) {
+                    val line = source.readUtf8Line() ?: break
+                    val trimmed = line.trim()
+                    if (trimmed.isEmpty() || trimmed.startsWith(":")) continue
+                    if (!trimmed.startsWith("data:")) continue
+                    val data = trimmed.removePrefix("data:").trim()
+                    if (data == "[DONE]") {
+                        return@use
+                    }
+                    val delta = parseDelta(data)
+                    if (delta.isNotEmpty()) {
+                        accumulated.append(delta)
+                        emit(AiModelStreamChunk.Delta(delta))
+                    }
+                }
+            }
+            emit(
+                AiModelStreamChunk.Final(
+                    AiModelResponse(
+                        content = accumulated.toString(),
+                        providerId = id,
+                        providerName = displayName,
+                        status = ModelRuntimeStatus.Ready,
+                        success = accumulated.isNotEmpty()
+                    )
+                )
+            )
+        } catch (t: Throwable) {
+            emit(AiModelStreamChunk.Error(t))
+        }
+    }.flowOn(Dispatchers.IO)
+
+    private fun parseDelta(json: String): String {
+        return try {
+            val obj = JsonParser.parseString(json).asJsonObject
+            obj.getAsJsonArray("choices")?.firstOrNull()
+                ?.asJsonObject?.getAsJsonObject("delta")
+                ?.get("content")?.takeIf { !it.isJsonNull }
+                ?.asString ?: ""
+        } catch (e: Exception) {
+            ""
         }
     }
 }

@@ -10,6 +10,7 @@ import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.VibratorManager
 import android.provider.Settings
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import com.flashidea.app.MainActivity
 
@@ -19,6 +20,7 @@ class FlashGestureService : AccessibilityService() {
     private var lastLaunchElapsedRealtime = 0L
 
     override fun onServiceConnected() {
+        logRomInfo()
         serviceInfo = serviceInfo.apply {
             flags = flags or
                 AccessibilityServiceInfo.FLAG_REQUEST_TOUCH_EXPLORATION_MODE or
@@ -30,6 +32,9 @@ class FlashGestureService : AccessibilityService() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             api33Controller?.close()
             api33Controller = Api33ThreeFingerController(this, ::launchCapture)
+            Log.i(TAG, "API33 ThreeFingerController 已启用（放宽阈值 + 全状态委托兜底）")
+        } else {
+            Log.w(TAG, "API < 33，仅走 deprecated onGesture(Int) 路径，三指手势可能被系统优先消费")
         }
     }
 
@@ -57,14 +62,19 @@ class FlashGestureService : AccessibilityService() {
         if (gestureId != AccessibilityService.GESTURE_3_FINGER_DOUBLE_TAP) {
             return false
         }
+        Log.d(TAG, "收到 GESTURE_3_FINGER_DOUBLE_TAP（API<33 路径）")
         launchCapture()
         return true
     }
 
     private fun launchCapture() {
         val now = SystemClock.elapsedRealtime()
-        if (now - lastLaunchElapsedRealtime < LAUNCH_COOLDOWN_MILLIS) return
+        if (now - lastLaunchElapsedRealtime < LAUNCH_COOLDOWN_MILLIS) {
+            Log.d(TAG, "launchCapture 冷却中，忽略重复触发")
+            return
+        }
         lastLaunchElapsedRealtime = now
+        Log.i(TAG, "launchCapture 触发快速记录入口")
         getSystemService(VibratorManager::class.java)
             ?.defaultVibrator
             ?.vibrate(
@@ -76,7 +86,20 @@ class FlashGestureService : AccessibilityService() {
         sendNewNoteIntent(this)
     }
 
+    /** 输出 ROM 信息，便于真机排查三指手势兼容性。 */
+    private fun logRomInfo() {
+        Log.i(
+            TAG,
+            "ROM 信息: manufacturer=${Build.MANUFACTURER}, " +
+                "brand=${Build.BRAND}, " +
+                "model=${Build.MODEL}, " +
+                "sdk=${Build.VERSION.SDK_INT}, " +
+                "release=${Build.VERSION.RELEASE}"
+        )
+    }
+
     companion object {
+        private const val TAG = "FlashGesture"
         private const val LAUNCH_COOLDOWN_MILLIS = 800L
         private const val CONFIRMATION_VIBRATION_MILLIS = 35L
 

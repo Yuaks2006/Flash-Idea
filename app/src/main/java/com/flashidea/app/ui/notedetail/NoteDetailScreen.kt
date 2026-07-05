@@ -15,6 +15,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.flashidea.app.ui.theme.*
+import com.flashidea.app.ui.common.ConfirmDialog
 import com.flashidea.app.ui.common.QuietBackground
 import com.flashidea.app.ui.common.QuietDivider
 
@@ -27,9 +28,19 @@ fun NoteDetailScreen(
 ) {
     val idea by viewModel.idea.collectAsState()
     val relatedIdeas by viewModel.relatedIdeas.collectAsState()
+    val showDeleteDialog by viewModel.deleteConfirm.collectAsState()
     val context = LocalContext.current
 
     LaunchedEffect(noteId) { viewModel.load(noteId) }
+
+    ConfirmDialog(
+        show = showDeleteDialog,
+        title = "删除笔记",
+        message = "删除后无法恢复，确定删除这条笔记吗？",
+        confirmText = "删除",
+        onConfirm = { viewModel.confirmDelete { onNavigateBack() } },
+        onDismiss = { viewModel.dismissDeleteConfirm() }
+    )
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -58,7 +69,7 @@ fun NoteDetailScreen(
                     }) {
                         Icon(Icons.Default.Share, contentDescription = "导出")
                     }
-                    TextButton(onClick = { viewModel.delete { onNavigateBack() } }) {
+                    TextButton(onClick = { viewModel.showDeleteConfirm() }) {
                         Text("删除", color = MaterialTheme.colorScheme.error)
                     }
                 },

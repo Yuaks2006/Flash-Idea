@@ -6,12 +6,18 @@ import com.flashidea.app.ai.IdeaProcessor
 import com.flashidea.app.data.local.IdeaEntity
 import com.flashidea.app.data.local.InsightEntity
 import com.flashidea.app.data.local.LinkEntity
+import com.flashidea.app.data.prefs.AppPreferences
 import com.flashidea.app.data.repository.IdeaRepository
+import com.flashidea.app.work.IncubationScheduler
 import com.google.gson.Gson
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -24,11 +30,21 @@ data class AiProcessResult(
 @HiltViewModel
 class NewNoteViewModel @Inject constructor(
     private val repository: IdeaRepository,
-    private val ideaProcessor: IdeaProcessor
+    private val ideaProcessor: IdeaProcessor,
+    private val appPreferences: AppPreferences,
+    private val incubationScheduler: IncubationScheduler
 ) : ViewModel() {
 
     private val _content = MutableStateFlow("")
     val content = _content.asStateFlow()
+
+    /** 进入页面（或应用初始内容）时记录的快照，用于判断是否相对初始有未保存变更。 */
+    private var initialContent: String = ""
+
+    /** 是否存在未保存变更：content 非空且与初始快照不同。 */
+    val isDirty: StateFlow<Boolean> = _content
+        .map { it.isNotBlank() && it != initialContent }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     private val _isProcessing = MutableStateFlow(false)
     val isProcessing = _isProcessing.asStateFlow()
@@ -44,9 +60,15 @@ class NewNoteViewModel @Inject constructor(
 
     fun onContentChange(text: String) { _content.value = text }
 
+    /** 计算函数版本，供不需要订阅的场景一次性查询。 */
+    fun hasUnsavedChanges(): Boolean =
+        _content.value.isNotBlank() && _content.value != initialContent
+
     fun applyInitialContent(text: String) {
         if (_content.value.isBlank() && text.isNotBlank()) {
-            _content.value = text.trim()
+            val trimmed = text.trim()
+            initialContent = trimmed
+            _content.value = trimmed
         }
     }
 
@@ -57,7 +79,15 @@ class NewNoteViewModel @Inject constructor(
             return
         }
         viewModelScope.launch {
-            persistDraft(text)
+            val idea = persistDraft(text)
+            // 保存成功后，将初始快照对齐到当前内容，标记为"已保存"。
+            initialContent = text
+            // 若用户开启了自动孵化，则触发后台增量孵化（不阻塞 UI）。
+            runCatching {
+                if (appPreferences.isAutoIncubateEnabled()) {
+                    incubationScheduler.enqueueIncremental(idea.id)
+                }
+            }
             onDone()
         }
     }

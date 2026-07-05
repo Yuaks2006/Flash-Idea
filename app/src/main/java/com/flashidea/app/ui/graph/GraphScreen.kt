@@ -5,10 +5,10 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -18,9 +18,21 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -39,6 +51,7 @@ import com.flashidea.app.ui.common.QuietBackground
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.launch
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
@@ -139,10 +152,14 @@ fun GraphScreen(
         }
     ) { paddingValues ->
         QuietBackground {
+            val systemBottomPadding = WindowInsets.navigationBars
+                .asPaddingValues()
+                .calculateBottomPadding()
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(paddingValues)
+                    .padding(bottom = systemBottomPadding + 88.dp)
             ) {
             if (ideas.isEmpty()) {
                 EmptyGraphState()
@@ -198,6 +215,7 @@ fun GraphScreen(
 
 // ── 图谱 Canvas ──────────────────────────────────────────────────────────────
 
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun GraphCanvas(
     ideas: List<IdeaEntity>,
@@ -209,15 +227,15 @@ private fun GraphCanvas(
     val haptic = LocalHapticFeedback.current
     val textMeasurer = rememberTextMeasurer()
 
-    var viewport by remember { mutableStateOf(GraphViewport(scale = 0.72f, offsetX = 0f, offsetY = 0f)) }
-    var draggingNodeId by remember { mutableStateOf<String?>(null) }
-
-    // 力导向布局坐标（世界坐标），key = id 变化时重算
-    var positions by remember(ideas.map { it.id }, links.map { it.id }) {
+    // ── 视图状态：MutableState 持有，pointerInput(k=Unit) 内部通过 .value 读写最新值，避免重建
+    val viewportState = remember { mutableStateOf(GraphViewport(scale = 0.72f, offsetX = 0f, offsetY = 0f)) }
+    val positionsState = remember(ideas.map { it.id }, links.map { it.id }) {
         mutableStateOf(ForceLayout.compute(ideas, links))
     }
+    val draggingNodeId = remember { mutableStateOf<String?>(null) }
+    val selectedIdRef = rememberUpdatedState(selectedId)
 
-    // 预计算节点度数
+    // ── 力导向布局坐标（世界坐标），key = id 变化时重算 ──
     val degree: Map<String, Int> = remember(links) {
         buildMap {
             links.forEach { link ->
@@ -227,6 +245,8 @@ private fun GraphCanvas(
         }
     }
     val maxDeg = remember(degree) { degree.values.maxOrNull()?.toFloat()?.coerceAtLeast(1f) ?: 1f }
+    val degreeRef = rememberUpdatedState(degree)
+    val maxDegRef = rememberUpdatedState(maxDeg)
 
     val minRadiusPx = with(density) { 20.dp.toPx() }
     val maxRadiusPx = with(density) { 32.dp.toPx() }
@@ -236,30 +256,59 @@ private fun GraphCanvas(
     val outlineVariant = MaterialTheme.colorScheme.outlineVariant
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
     val surfaceVariant = MaterialTheme.colorScheme.surfaceVariant
-    val onSurface = MaterialTheme.colorScheme.onSurface
+    val shadowColor = Color.Black
 
-    fun hitTestNode(screenPoint: Offset): IdeaEntity? {
-        val world = viewport.screenToWorld(screenPoint.x, screenPoint.y)
+    // 性能：category 颜色 & Brush 缓存（每种 category 复用同一 Brush）
+    val brushCache: Map<String, Brush> = remember(primary, secondary, tertiary, surfaceVariant) {
+        mapOf(
+            "项目火种" to Brush.radialGradient(
+                colors = listOf(primary.copy(alpha = 0.96f), primary.copy(alpha = 0.62f), surfaceVariant.copy(alpha = 0.54f)),
+                center = Offset(0.42f, 0.38f)
+            ),
+            "任务" to Brush.radialGradient(
+                colors = listOf(tertiary.copy(alpha = 0.96f), tertiary.copy(alpha = 0.62f), surfaceVariant.copy(alpha = 0.54f)),
+                center = Offset(0.42f, 0.38f)
+            )
+        )
+    }
+    val defaultBrush = remember(secondary, surfaceVariant) {
+        Brush.radialGradient(
+            colors = listOf(secondary.copy(alpha = 0.96f), secondary.copy(alpha = 0.62f), surfaceVariant.copy(alpha = 0.54f)),
+            center = Offset(0.42f, 0.38f)
+        )
+    }
+
+    // 性能：节点图标预渲染为 ImageBitmap，按 category 复用
+    val iconSizePx = with(density) { 18.dp.toPx() }
+
+    // 性能：节点标签 TextLayoutResult 缓存（按 idea id+summary+category 指纹重置）
+    val textFingerprint = ideas.map { it.id + "|" + it.summary + "|" + it.category }.hashCode()
+    val textCache = remember(textFingerprint) { mutableMapOf<String, androidx.compose.ui.text.TextLayoutResult>() }
+
+    fun hitTestNodeScreen(screenPoint: Offset, v: GraphViewport): IdeaEntity? {
+        val world = v.screenToWorld(screenPoint.x, screenPoint.y)
+        val hitTolerance = with(density) { NODE_HIT_RADIUS_DP.dp.toPx() }
         return ideas.firstOrNull { idea ->
-            val pos = positions[idea.id] ?: return@firstOrNull false
-            val d = degree[idea.id] ?: 0
-            val ratio = if (maxDeg > 1f) d / maxDeg else 0f
+            val pos = positionsState.value[idea.id] ?: return@firstOrNull false
+            val d = degreeRef.value[idea.id] ?: 0
+            val ratio = if (maxDegRef.value > 1f) d / maxDegRef.value else 0f
             val radius = minRadiusPx + ratio * (maxRadiusPx - minRadiusPx)
             val dx = world.x - pos.x
             val dy = world.y - pos.y
-            sqrt(dx * dx + dy * dy) <= radius + 12f
+            sqrt(dx * dx + dy * dy) <= radius + hitTolerance
         }
     }
+    val hitTestFun = ::hitTestNodeScreen
 
     Box(modifier = Modifier.fillMaxSize()) {
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    scaleX = viewport.scale
-                    scaleY = viewport.scale
-                    translationX = viewport.offsetX
-                    translationY = viewport.offsetY
+                    scaleX = viewportState.value.scale
+                    scaleY = viewportState.value.scale
+                    translationX = viewportState.value.offsetX
+                    translationY = viewportState.value.offsetY
                 }
         ) {
             val gridStep = 96f
@@ -286,8 +335,8 @@ private fun GraphCanvas(
 
             // ── 先画边 ───────────────────────────────────────────────────────
             links.forEach { link ->
-                val a = positions[link.sourceId] ?: return@forEach
-                val b = positions[link.targetId] ?: return@forEach
+                val a = positionsState.value[link.sourceId] ?: return@forEach
+                val b = positionsState.value[link.targetId] ?: return@forEach
                 val lineColor = if (link.strength >= 0.7f) {
                     primary.copy(alpha = 0.5f)
                 } else {
@@ -302,40 +351,44 @@ private fun GraphCanvas(
                 )
             }
 
-            // ── 再画节点 + 标签 ───────────────────────────────────────────────
+            // ── 再画节点 + 阴影 + 图标 + 标签 ───────────────────────────────────
             ideas.forEach { idea ->
-                val pos = positions[idea.id] ?: return@forEach
+                val pos = positionsState.value[idea.id] ?: return@forEach
                 val deg = degree[idea.id] ?: 0
                 val ratio = if (maxDeg > 1f) deg / maxDeg else 0f
                 val radius = minRadiusPx + ratio * (maxRadiusPx - minRadiusPx)
 
-                val fillColor = when (idea.category) {
-                    "项目火种" -> primary
-                    "任务" -> tertiary
-                    else -> secondary
+                // 立体感：原生 ShadowLayer 通过 drawIntoCanvas + nativeCanvas 绘制
+                val blurPx = 6.dp.toPx()
+                val dyPx = 4.dp.toPx()
+                drawIntoCanvas { canvas ->
+                    val shadowPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                        color = shadowColor.toArgb()
+                        setShadowLayer(
+                            blurPx,
+                            0f,
+                            dyPx,
+                            0x33000000
+                        )
+                    }
+                    canvas.nativeCanvas.drawCircle(pos.x, pos.y, radius - 1f, shadowPaint)
                 }
 
+                // 主填充：复用按 category 缓存的径向渐变 Brush
                 drawCircle(
-                    brush = Brush.radialGradient(
-                        listOf(
-                            fillColor.copy(alpha = 0.96f),
-                            fillColor.copy(alpha = 0.62f),
-                            surfaceVariant.copy(alpha = 0.54f)
-                        ),
-                        center = Offset(pos.x - radius * 0.38f, pos.y - radius * 0.42f),
-                        radius = radius * 1.8f
-                    ),
+                    brush = brushCache[idea.category] ?: defaultBrush,
                     radius = radius,
                     center = pos
                 )
+                // 描边 alpha 0.08 → 0.25
                 drawCircle(
-                    color = onSurface.copy(alpha = 0.08f),
+                    color = Color.White.copy(alpha = 0.25f),
                     radius = radius,
                     center = pos,
-                    style = Stroke(width = 1.2f)
+                    style = Stroke(width = 1.4f)
                 )
 
-                // 选中描边
+                // 选中态描边
                 if (idea.id == selectedId) {
                     drawCircle(
                         color = secondary.copy(alpha = 0.16f),
@@ -350,107 +403,139 @@ private fun GraphCanvas(
                     )
                 }
 
-                if (idea.id == draggingNodeId) {
+                // 拖动节点局部高亮外圈（radius + 4dp 半透明环）
+                if (idea.id == draggingNodeId.value) {
                     drawCircle(
-                        color = primary.copy(alpha = 0.22f),
-                        radius = radius + 24f,
-                        center = pos
+                        color = primary.copy(alpha = 0.28f),
+                        radius = radius + 4.dp.toPx(),
+                        center = pos,
+                        style = Stroke(width = 3.dp.toPx())
                     )
                 }
 
-                // 节点标签（11sp）
-                val label = (idea.summary.takeIf { it.isNotBlank() } ?: idea.content)
-                    .take(8)
-                val textResult = textMeasurer.measure(
-                    text = label,
-                    style = TextStyle(
-                        color = labelColor,
-                        fontSize = 11.sp
+                // 节点标签：take(16) + 最多 2 行 + 椭圆省略；按 idea id 缓存 measure 结果
+                val label = (idea.summary.takeIf { it.isNotBlank() } ?: idea.content).take(16)
+                val maxLabeWidthPx = (radius * 3f).toInt().coerceAtLeast(1)
+                val result = textCache.getOrPut(idea.id) {
+                    textMeasurer.measure(
+                        text = label,
+                        style = TextStyle(color = labelColor, fontSize = 11.sp),
+                        overflow = TextOverflow.Ellipsis,
+                        maxLines = 2,
+                        softWrap = true,
+                        constraints = androidx.compose.ui.unit.Constraints(
+                            maxWidth = maxLabeWidthPx,
+                            maxHeight = Int.MAX_VALUE
+                        )
                     )
-                )
+                }
                 drawText(
-                    textLayoutResult = textResult,
+                    textLayoutResult = result,
                     topLeft = Offset(
-                        x = pos.x - textResult.size.width / 2f,
+                        x = pos.x - result.size.width / 2f,
                         y = pos.y + radius + 4f
                     )
                 )
             }
         }
 
-        // ── 手势层：拖动画布、双指缩放、点击节点、长按拖动节点 ───────────────
+        // ── 手势统一层：单 pointerInput(Unit)，合并 描述 pan/zoom/tap/drag ──────
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .pointerInput(ideas, positions, viewport) {
-                    detectTransformGestures { centroid, pan, zoom, _ ->
-                        if (draggingNodeId == null) {
-                            viewport = viewport
-                                .zoomAround(
-                                    centroidX = centroid.x,
-                                    centroidY = centroid.y,
-                                    zoom = zoom,
-                                    minScale = 0.34f,
-                                    maxScale = 4.8f
-                                )
-                                .panBy(pan.x, pan.y)
+                .pointerInput(Unit) {
+                    val touchSlop = viewConfiguration.touchSlop
+                    awaitPointerEventScope {
+                        var dragNode: String? = null
+                        var downScreen: Offset? = null
+                        var lastSinglePos: Offset? = null
+                        var lastDownTimeMs = 0L
+                        var dragged = false
+                        var prevZoomDist: Float? = null
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val pointers = event.changes.map { it.position }
+                            val n = pointers.size
+                            val v = viewportState.value
+                            when (event.type) {
+                                PointerEventType.Press -> {
+                                    val hit = hitTestFun(pointers.first(), v)
+                                    dragNode = hit?.id
+                                    if (dragNode != null) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    downScreen = pointers.first()
+                                    lastDownTimeMs = System.currentTimeMillis()
+                                    lastSinglePos = pointers.first()
+                                    dragged = false
+                                    prevZoomDist = null
+                                }
+                                PointerEventType.Move -> {
+                                    if (n >= 2) {
+                                        // 双指缩放
+                                        val dist = (pointers[0] - pointers[1]).getDistance()
+                                        val centroid = (pointers[0] + pointers[1]) / 2f
+                                        prevZoomDist?.let { pd ->
+                                            if (pd > 0.01f) {
+                                                val z = (dist / pd).coerceIn(0.7f, 1.5f)
+                                                viewportState.value = v.zoomAround(
+                                                    centroid.x, centroid.y, z, 0.34f, 4.8f
+                                                )
+                                            }
+                                        }
+                                        prevZoomDist = dist
+                                        dragged = true
+                                        dragNode = null
+                                    } else if (n == 1) {
+                                        // 单指：拖动节点 或 平移画布
+                                        val now = pointers[0]
+                                        val dx = now.x - (lastSinglePos ?: now).x
+                                        val dy = now.y - (lastSinglePos ?: now).y
+                                        val node = dragNode
+                                        if (node != null) {
+                                            val s = v.scale.coerceAtLeast(0.01f)
+                                            val cur = positionsState.value[node]
+                                            if (cur != null) {
+                                                positionsState.value = positionsState.value + (node to Offset(cur.x + dx / s, cur.y + dy / s))
+                                            }
+                                            if (hypot(dx, dy) > touchSlop) dragged = true
+                                        } else if (hypot(dx, dy) > touchSlop) {
+                                            dragged = true
+                                            viewportState.value = v.panBy(dx, dy)
+                                        }
+                                        lastSinglePos = now
+                                    }
+                                }
+                                PointerEventType.Release, PointerEventType.Exit -> {
+                                    val release = pointers.firstOrNull() ?: downScreen
+                                    if (!dragged && release != null && downScreen != null) {
+                                        val dt = System.currentTimeMillis() - lastDownTimeMs
+                                        val moved = (release - downScreen).getDistance()
+                                        if (dt < 250 && moved < touchSlop) {
+                                            // tap：命中节点则切换选中，否则取消选中
+                                            val hit = hitTestFun(release, viewportState.value)
+                                            if (hit != null) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onNodeSelected(
+                                                if (hit?.id == null || hit.id == selectedIdRef.value) null else hit.id
+                                            )
+                                        }
+                                    }
+                                    dragNode = null
+                                    prevZoomDist = null
+                                    lastSinglePos = null
+                                    downScreen = null
+                                    dragged = false
+                                }
+                                else -> Unit
+                            }
                         }
                     }
-                }
-                .pointerInput(ideas, positions, viewport, selectedId) {
-                    detectTapGestures(
-                        onDoubleTap = { tapScreen ->
-                            val targetZoom = if (viewport.scale < 1.2f) 1.9f else 0.72f / viewport.scale
-                            viewport = viewport.zoomAround(
-                                centroidX = tapScreen.x,
-                                centroidY = tapScreen.y,
-                                zoom = targetZoom,
-                                minScale = 0.34f,
-                                maxScale = 4.8f
-                            )
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        },
-                        onTap = { tapScreen ->
-                            val hit = hitTestNode(tapScreen)
-                            if (hit != null) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onNodeSelected(if (hit?.id == null || hit.id == selectedId) null else hit.id)
-                        }
-                    )
-                }
-                .pointerInput(ideas, positions, viewport) {
-                    detectDragGesturesAfterLongPress(
-                        onDragStart = { start ->
-                            draggingNodeId = hitTestNode(start)?.id
-                            if (draggingNodeId != null) {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            }
-                        },
-                        onDragEnd = { draggingNodeId = null },
-                        onDragCancel = { draggingNodeId = null },
-                        onDrag = { change, dragAmount ->
-                            val nodeId = draggingNodeId
-                            if (nodeId != null) {
-                                val current = positions[nodeId]
-                                if (current != null) {
-                                    positions = positions + (
-                                        nodeId to Offset(
-                                            current.x + dragAmount.x / viewport.scale,
-                                            current.y + dragAmount.y / viewport.scale
-                                        )
-                                    )
-                                }
-                                change.consume()
-                            }
-                        }
-                    )
                 }
         )
 
         TextButton(
-            onClick = { viewport = GraphViewport(scale = 0.72f, offsetX = 0f, offsetY = 0f) },
+            onClick = { viewportState.value = GraphViewport(scale = 0.72f, offsetX = 0f, offsetY = 0f) },
             modifier = Modifier.align(Alignment.TopEnd).padding(12.dp)
         ) {
-            Text("${(viewport.scale * 100).roundToInt()}%")
+            Text("${(viewportState.value.scale * 100).roundToInt()}%")
         }
     }
 }

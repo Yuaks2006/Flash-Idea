@@ -5,39 +5,30 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountTree
-import androidx.compose.material.icons.automirrored.filled.Chat
-import androidx.compose.material.icons.automirrored.filled.List
-import androidx.navigation.NavController
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.flashidea.app.navigation.FlashIdeaNavGraph
 import com.flashidea.app.navigation.Routes
+import com.flashidea.app.ui.common.FloatingNavBar
 import com.flashidea.app.ui.theme.FlashIdeaTheme
 import dagger.hilt.android.AndroidEntryPoint
 
@@ -94,8 +85,9 @@ private fun FlashIdeaContent(
     FlashIdeaTheme {
         val navController = rememberNavController()
         val bottomNavRoutes = listOf(Routes.NOTE_LIST, Routes.GRAPH, Routes.AI_CHAT)
-        val currentRoute by navController.currentBackStackEntryAsState()
-        val showBottomBar = currentRoute?.destination?.route in bottomNavRoutes
+        val currentRouteEntry by navController.currentBackStackEntryAsState()
+        val currentRoute = currentRouteEntry?.destination?.route
+        val showBottomBar = currentRoute in bottomNavRoutes
 
         LaunchedEffect(captureRequest?.id) {
             if (captureRequest != null) {
@@ -106,112 +98,52 @@ private fun FlashIdeaContent(
             }
         }
 
-        Scaffold(
-            bottomBar = {
-                if (showBottomBar) BottomNavBar(navController)
-            }
-        ) { padding ->
-            Box(
-                Modifier
-                    .padding(padding)
-                    .consumeWindowInsets(padding)
+        // 灵动岛布局：NavHost 占满底层，FloatingNavBar 作为 Box overlay 漂浮于内容上层
+        Box(modifier = Modifier.fillMaxSize()) {
+            FlashIdeaNavGraph(
+                navController = navController,
+                initialCaptureText = captureRequest?.initialText,
+                onCaptureTextConsumed = onCaptureConsumed
+            )
+
+            // 内容区底部渐变遮罩，消除背景色阶跳变到悬浮导航栏的硬切
+            AnimatedVisibility(
+                visible = showBottomBar,
+                modifier = Modifier.align(Alignment.BottomCenter)
             ) {
-                FlashIdeaNavGraph(
-                    navController = navController,
-                    initialCaptureText = captureRequest?.initialText,
-                    onCaptureTextConsumed = onCaptureConsumed
-                )
-            }
-        }
-    }
-}
-
-data class BottomNavItem(val label: String, val icon: ImageVector, val route: String)
-
-@Composable
-private fun BottomNavBar(navController: NavController) {
-    val items = listOf(
-        BottomNavItem("笔记", Icons.AutoMirrored.Filled.List,   Routes.NOTE_LIST),
-        BottomNavItem("图谱", Icons.Default.AccountTree,         Routes.GRAPH),
-        BottomNavItem("AI",   Icons.AutoMirrored.Filled.Chat,   Routes.AI_CHAT),
-    )
-    val currentRoute by navController.currentBackStackEntryAsState()
-
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 28.dp, vertical = 10.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Surface(
-            modifier = Modifier
-                .width(260.dp)
-                .height(64.dp),
-            shape = RoundedCornerShape(32.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.9f)),
-            shadowElevation = 10.dp,
-            tonalElevation = 0.dp
-        ) {
-            Row(
-                modifier = Modifier
-                    .background(
-                        Brush.linearGradient(
-                            listOf(
-                                Color.White.copy(alpha = 0.18f),
-                                MaterialTheme.colorScheme.surfaceContainerHigh,
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(140.dp)
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    Color.Transparent,
+                                    Color.Transparent,
+                                    MaterialTheme.colorScheme.background.copy(alpha = 0.65f)
+                                )
                             )
                         )
-                    )
-                    .padding(horizontal = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
+                )
+            }
+
+            AnimatedVisibility(
+                visible = showBottomBar,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .imePadding()           // 键盘弹出时整体上移至 IME 上方
             ) {
-                items.forEach { item ->
-                    val selected = currentRoute?.destination?.route == item.route
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(44.dp)
-                            .semantics { role = Role.Button }
-                            .clickable(onClickLabel = item.label) {
-                                navController.navigate(item.route) {
-                                    popUpTo(Routes.NOTE_LIST) { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Surface(
-                            modifier = Modifier.size(if (selected) 42.dp else 34.dp),
-                            shape = CircleShape,
-                            color = if (selected) {
-                                MaterialTheme.colorScheme.primaryContainer
-                            } else {
-                                Color.Transparent
-                            },
-                            border = if (selected) {
-                                BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.24f))
-                            } else {
-                                null
-                            }
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    item.icon,
-                                    contentDescription = item.label,
-                                    tint = if (selected) {
-                                        MaterialTheme.colorScheme.onPrimaryContainer
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                    },
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
+                FloatingNavBar(
+                    currentRoute = currentRoute,
+                    onRouteSelected = { route ->
+                        navController.navigate(route) {
+                            popUpTo(Routes.NOTE_LIST) { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
                         }
-                    }
-                }
+                    },
+                    modifier = Modifier.padding(bottom = 24.dp)
+                )
             }
         }
     }

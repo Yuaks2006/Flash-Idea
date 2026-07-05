@@ -1,5 +1,6 @@
 package com.flashidea.app.ui.newnote
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Column
@@ -40,7 +41,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -49,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.flashidea.app.BuildConfig
 import com.flashidea.app.ui.common.QuietBackground
+import com.flashidea.app.ui.common.TripleActionDialog
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,8 +68,38 @@ fun NewNoteScreen(
     val isProcessing by viewModel.isProcessing.collectAsState()
     val savedNoteId by viewModel.savedNoteId.collectAsState()
     val message by viewModel.message.collectAsState()
+    val isDirty by viewModel.isDirty.collectAsState()
     val focusRequester = remember { FocusRequester() }
     val snackbarHostState = remember { SnackbarHostState() }
+    var showExitDialog by remember { mutableStateOf(false) }
+
+    // 拦截系统返回手势：仅当存在未保存变更时弹"取消 / 不保存 / 保存"弹窗。
+    BackHandler(enabled = isDirty) { showExitDialog = true }
+
+    if (showExitDialog) {
+        TripleActionDialog(
+            show = true,
+            title = "未保存",
+            message = "当前内容还未保存，要怎么做？",
+            neutralText = "取消",
+            negativeText = "不保存",
+            affirmativeText = "保存",
+            onNeutral = { showExitDialog = false },
+            onNegative = {
+                showExitDialog = false
+                onNavigateBack()
+            },
+            onAffirmative = {
+                showExitDialog = false
+                viewModel.save { onNavigateBack() }
+            },
+            onDismiss = { showExitDialog = false }
+        )
+    }
+
+    val handleBack: () -> Unit = {
+        if (isDirty) showExitDialog = true else onNavigateBack()
+    }
 
     LaunchedEffect(initialContent) {
         if (initialContent != null) {
@@ -89,7 +123,7 @@ fun NewNoteScreen(
             TopAppBar(
                 title = {},
                 navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
+                    IconButton(onClick = handleBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
