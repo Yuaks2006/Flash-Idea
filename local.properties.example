@@ -1,0 +1,6 @@
+sdk.dir=C\:\\Android\\Sdk
+AI_PROVIDER=vivo
+AI_BASE_URL=https://api-ai.vivo.com.cn/v1/
+AI_MODEL=Doubao-Seed-2.0-mini
+VIVO_APP_ID=
+AI_API_KEY=

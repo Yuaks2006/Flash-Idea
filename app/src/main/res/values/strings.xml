@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Flash Idea</string>
+    <string name="accessibility_service_description">三指快速双击屏幕任意位置，打开 Flash Idea 新建笔记页。服务只处理触摸手势，不读取窗口内容或文字。</string>
+    <string name="tile_capture_label">记录灵感</string>
+    <string name="shortcut_new_idea_short">新建灵感</string>
+    <string name="shortcut_new_idea_long">立即记录一个新想法</string>
+</resources>

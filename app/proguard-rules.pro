@@ -1,0 +1,2 @@
+-keep class com.flashidea.app.data.** { *; }
+-keep class com.flashidea.app.ai.** { *; }

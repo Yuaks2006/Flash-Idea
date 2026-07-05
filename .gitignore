@@ -1,0 +1,12 @@
+*.iml
+.gradle/
+.gradle-ascii/
+.gradle-tmp/
+.idea/
+local.properties
+build/
+app/build/
+captures/
+*.jks
+*.keystore
+artifacts/apk/*.apk

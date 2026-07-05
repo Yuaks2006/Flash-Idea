@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="new_idea"
+        android:enabled="true"
+        android:icon="@drawable/ic_flash"
+        android:shortcutShortLabel="@string/shortcut_new_idea_short"
+        android:shortcutLongLabel="@string/shortcut_new_idea_long">
+        <intent
+            android:action="com.flashidea.app.ACTION_NEW_NOTE"
+            android:targetPackage="com.flashidea.app"
+            android:targetClass="com.flashidea.app.MainActivity" />
+    </shortcut>
+</shortcuts>
