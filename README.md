@@ -151,6 +151,13 @@ release/FlashIdea-source.zip
 6. 打开知识图谱，观察相同标签笔记之间的连线。
 7. 到设置页查看导出、模型配置和本地优先策略。
 
+## 展示材料
+
+![Flash Idea 项目海报](docs/showcase/poster.jpg)
+
+- [项目汇报 PPT](docs/showcase/Flash-Idea-presentation.pptx)
+- [产品演示视频](docs/showcase/demo-video.mp4)
+
 ## 构建
 
 要求：
