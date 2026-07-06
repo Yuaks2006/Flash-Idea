@@ -210,6 +210,11 @@ local.properties.example -> local.properties
 5. 看 `app/src/main/java/com/flashidea/app/ai/memory/` 和 `ui/graph/`，理解知识图谱。
 6. 安装 APK 真机体验，再开始写 PPT 或录制视频。
 
+## 项目贡献者
+
+- 项目团队：负责产品定义、功能设计、开发实现、测试验收与展示材料制作。
+- Codex：AI coding assistant，参与 Android 工程重构、Agent 架构预留、多模型路由、文档整理与交付材料归档。
+
 ## 宣传材料关键词
 
 产品宣传时请优先强调：
