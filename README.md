@@ -182,6 +182,16 @@ local.properties.example -> local.properties
 
 `local.properties` 已被 Git 忽略。不要把 AppID、API Key、模型密钥提交到仓库。
 
+## GitHub 分支说明
+
+当前 GitHub 仓库保留了几个分支，用于区分最终展示、发布记录和修复记录：
+
+- `main`：当前默认展示分支，对应 Flash Idea 复赛最终版 README 与项目说明。
+- `master`：历史发布分支，保留过复赛最终 App 发布提交。
+- `fix/7-issues-systematic-fix`：队友提交的“7 大问题系统性修复”分支，用于保留最后一轮 bug 修复记录；该分支已上传到 GitHub，但没有直接覆盖 `main`。
+
+后续继续迭代时，建议从 `main` 新建功能分支，确认稳定后再合入 `main`，避免直接覆盖复赛最终展示版本。
+
 ## 给开发者和 Agent 的阅读路径
 
 如果你要快速理解项目，用这个顺序：
@@ -204,3 +214,11 @@ local.properties.example -> local.properties
 - 知识图谱关联
 - Air 像素云 Agent IP
 - 从灵感到计划、验证、结论的闭环
+
+## 版本
+
+当前应用版本：`v1.0.0-复赛最终版`
+
+版本日期：2026-07-06
+
+版本说明：完成复赛最终交付，包含 Android 源码、可安装 APK、源码压缩包、项目 README、汇报 PPT、演示视频与海报材料。后续迭代请在此版本基础上更新版本号与变更记录。
