@@ -9,6 +9,7 @@ import com.flashidea.app.ai.model.config.ModelPreferenceRepository
 import com.flashidea.app.ai.model.config.ModelProviderConfig
 import com.flashidea.app.ai.model.config.ModelProviderType
 import com.flashidea.app.data.local.IdeaEntity
+import com.flashidea.app.data.prefs.AppPreferences
 import com.flashidea.app.data.repository.IdeaRepository
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -25,7 +26,8 @@ import javax.inject.Inject
 class SettingsViewModel @Inject constructor(
     repository: IdeaRepository,
     agentRuntime: AgentRuntime,
-    private val modelPreferences: ModelPreferenceRepository
+    private val modelPreferences: ModelPreferenceRepository,
+    private val appPreferences: AppPreferences
 ) : ViewModel() {
 
     val allIdeas: StateFlow<List<IdeaEntity>> = repository.getAllIdeas()
@@ -35,6 +37,13 @@ class SettingsViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ModelProviderConfig())
 
     val modelSnapshot: ModelRuntimeSnapshot = agentRuntime.modelSnapshot()
+
+    val autoIncubate: StateFlow<Boolean> = appPreferences.autoIncubate
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AppPreferences.DEFAULT_AUTO_INCUBATE)
+
+    fun setAutoIncubate(enabled: Boolean) {
+        viewModelScope.launch { appPreferences.setAutoIncubate(enabled) }
+    }
 
     fun selectProvider(type: ModelProviderType) {
         viewModelScope.launch {

@@ -17,6 +17,9 @@ class NoteDetailViewModel @Inject constructor(private val repository: IdeaReposi
     private val _relatedIdeas = MutableStateFlow<List<IdeaEntity>>(emptyList())
     val relatedIdeas = _relatedIdeas.asStateFlow()
 
+    private val _deleteConfirm = MutableStateFlow(false)
+    val deleteConfirm = _deleteConfirm.asStateFlow()
+
     fun load(noteId: String) {
         viewModelScope.launch {
             _idea.value = repository.getIdeaById(noteId)
@@ -27,7 +30,15 @@ class NoteDetailViewModel @Inject constructor(private val repository: IdeaReposi
         }
     }
 
-    fun delete(onDone: () -> Unit) {
+    /** UI 触发：弹出删除二次确认弹窗。 */
+    fun showDeleteConfirm() { _deleteConfirm.value = true }
+
+    /** UI 触发：取消删除，关闭弹窗。 */
+    fun dismissDeleteConfirm() { _deleteConfirm.value = false }
+
+    /** UI 触发：用户确认删除，真正执行并回调导航。 */
+    fun confirmDelete(onDone: () -> Unit) {
+        _deleteConfirm.value = false
         viewModelScope.launch {
             _idea.value?.id?.let { repository.deleteIdea(it) }
             onDone()

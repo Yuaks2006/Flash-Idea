@@ -3,6 +3,7 @@ package com.flashidea.app.ui.aichat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.flashidea.app.ai.AiChatService
+import com.flashidea.app.ai.agent.AgentStreamEvent
 import com.flashidea.app.ai.model.config.CustomModelConfig
 import com.flashidea.app.ai.model.config.ModelPreferenceRepository
 import com.flashidea.app.ai.model.config.ModelProviderConfig
@@ -10,6 +11,7 @@ import com.flashidea.app.ai.model.config.ModelProviderType
 import com.flashidea.app.data.local.IdeaEntity
 import com.flashidea.app.data.repository.IdeaRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -34,6 +36,9 @@ class AiChatViewModel @Inject constructor(
 
     private val _activeProvider = MutableStateFlow("端侧优先")
     val activeProvider = _activeProvider.asStateFlow()
+
+    private val _aiPhase = MutableStateFlow<String?>(null)
+    val aiPhase: StateFlow<String?> = _aiPhase.asStateFlow()
 
     val modelConfig: StateFlow<ModelProviderConfig> = modelPreferences.config
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ModelProviderConfig())
@@ -67,25 +72,40 @@ class AiChatViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    private var chatJob: Job? = null
+
     fun onInputChange(text: String) { _input.value = text }
 
     fun openNotePicker() { _showNotePicker.value = true }
     fun closeNotePicker() { _showNotePicker.value = false }
 
+    // 选中笔记 id 集合 — 多选语义；UI 通过 selectedCount 显示数量
+    private val _selectedNoteIds = MutableStateFlow<Set<String>>(emptySet())
+    val selectedNoteIds: StateFlow<Set<String>> = _selectedNoteIds.asStateFlow()
+
+    val selectedCount: StateFlow<Int> = _selectedNoteIds
+        .map { it.size }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    // 列表点击只 select 不 toggle 取消，已选中的保留选中
     fun toggleNote(idea: IdeaEntity) {
-        val current = _contextNotes.value
-        _contextNotes.value = if (current.any { it.id == idea.id }) {
-            current.filter { it.id != idea.id }
-        } else {
-            current + idea
-        }
+        selectNote(idea)
+    }
+
+    private fun selectNote(idea: IdeaEntity) {
+        if (_contextNotes.value.any { it.id == idea.id }) return
+        _contextNotes.value = _contextNotes.value + idea
+        _selectedNoteIds.value = _selectedNoteIds.value + idea.id
+    }
+
+    fun deselectNote(id: String) = removeSelectedNote(id)
+
+    fun removeSelectedNote(id: String) {
+        _contextNotes.value = _contextNotes.value.filter { it.id != id }
+        _selectedNoteIds.value = _selectedNoteIds.value - id
     }
 
     fun isNoteSelected(ideaId: String) = _contextNotes.value.any { it.id == ideaId }
-
-    fun removeContextNote(ideaId: String) {
-        _contextNotes.value = _contextNotes.value.filter { it.id != ideaId }
-    }
 
     fun selectProvider(type: ModelProviderType) {
         viewModelScope.launch {
@@ -113,24 +133,59 @@ class AiChatViewModel @Inject constructor(
 
     fun sendPrompt(prompt: String) {
         val text = prompt.trim().ifEmpty { return }
-        if (_isLoading.value) return
+        chatJob?.cancel()
         val history = _messages.value.map { it.role to it.content }
         val notes = _contextNotes.value
         _messages.value += ChatMessage("user", text)
+        _messages.value += ChatMessage("assistant", "")
         _input.value = ""
         _isLoading.value = true
-        viewModelScope.launch {
+        _aiPhase.value = "思考中..."
+        chatJob = viewModelScope.launch {
             try {
-                val reply = aiChatService.chat(text, history, notes)
-                _activeProvider.value = if (reply.isFallback) {
-                    "${reply.providerName}（兜底）"
-                } else {
-                    reply.providerName
+                aiChatService.streamChat(text, history, notes).collect { event ->
+                    when (event) {
+                        is AgentStreamEvent.ToolPhase -> {
+                            _aiPhase.value = event.trace
+                        }
+                        is AgentStreamEvent.Delta -> {
+                            _aiPhase.value = null
+                            val current = _messages.value.toMutableList()
+                            val lastIdx = current.lastIndex
+                            if (lastIdx >= 0 && current[lastIdx].role == "assistant") {
+                                current[lastIdx] = current[lastIdx].copy(
+                                    content = current[lastIdx].content + event.text
+                                )
+                                _messages.value = current
+                            }
+                        }
+                        is AgentStreamEvent.Final -> {
+                            _aiPhase.value = null
+                            _activeProvider.value = if (event.reply.isFallback) {
+                                "${event.reply.providerName}（兜底）"
+                            } else {
+                                event.reply.providerName
+                            }
+                            if (event.reply.content.isNotBlank()) {
+                                val current = _messages.value.toMutableList()
+                                val lastIdx = current.lastIndex
+                                if (lastIdx >= 0 && current[lastIdx].role == "assistant") {
+                                    current[lastIdx] = current[lastIdx].copy(content = event.reply.content)
+                                    _messages.value = current
+                                }
+                            }
+                        }
+                    }
                 }
-                _messages.value += ChatMessage("assistant", reply.content)
             } finally {
                 _isLoading.value = false
+                _aiPhase.value = null
             }
         }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        chatJob?.cancel()
     }
 }

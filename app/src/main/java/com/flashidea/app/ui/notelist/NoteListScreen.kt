@@ -17,6 +17,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -91,6 +96,11 @@ fun NoteListScreen(
         if (selectedCategory == "全部") ideas else ideas.filter { it.category == selectedCategory }
     }
     var searchExpanded by rememberSaveable { mutableStateOf(false) }
+    // 悬浮导航栏 + 系统手势条 + IME 自适应底部留白
+    val systemBottomPadding = WindowInsets.navigationBars
+        .union(WindowInsets.ime)
+        .asPaddingValues()
+        .calculateBottomPadding()
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -116,6 +126,7 @@ fun NoteListScreen(
             Surface(
                 modifier = Modifier
                     .size(62.dp)
+                    .padding(bottom = systemBottomPadding + 64.dp)
                     .semantics { role = Role.Button }
                     .clickable(onClickLabel = "记录灵感", onClick = onNavigateToNewNote),
                 shape = MaterialTheme.shapes.extraLarge,
@@ -212,7 +223,7 @@ fun NoteListScreen(
                         start = 18.dp,
                         top = 4.dp,
                         end = 18.dp,
-                        bottom = 104.dp
+                        bottom = systemBottomPadding + 100.dp
                     ),
                     verticalArrangement = Arrangement.spacedBy(0.dp)
                 ) {

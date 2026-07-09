@@ -1,6 +1,11 @@
 package com.flashidea.app.ui.aichat
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -14,6 +19,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -34,6 +43,8 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -45,8 +56,11 @@ import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
@@ -55,20 +69,23 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.flashidea.app.ai.model.config.ModelProviderConfig
 import com.flashidea.app.ai.model.config.ModelProviderType
 import com.flashidea.app.data.local.IdeaEntity
 import com.flashidea.app.ui.common.QuietBackground
 import com.flashidea.app.ui.common.QuietPill
-import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -80,66 +97,64 @@ fun AiChatScreen(viewModel: AiChatViewModel = hiltViewModel()) {
     val modelConfig by viewModel.modelConfig.collectAsState()
     val contextChips by viewModel.contextChips.collectAsState()
     val contextNotes by viewModel.contextNotes.collectAsState()
+    val selectedCount by viewModel.selectedCount.collectAsState()
     val showNotePicker by viewModel.showNotePicker.collectAsState()
     val allIdeas by viewModel.allIdeas.collectAsState()
+    val aiPhase by viewModel.aiPhase.collectAsState()
     val listState = rememberLazyListState()
-    var wasLoading by remember { mutableStateOf(false) }
-    var receivingMessageCount by remember { mutableStateOf<Int?>(null) }
-    var pipelineMessageCount by remember { mutableStateOf<Int?>(null) }
-    var lastCompletedMessageCount by remember { mutableStateOf<Int?>(null) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val haptic = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
     var showModelSheet by remember { mutableStateOf(false) }
+    var prevSelectedCount by remember { mutableStateOf(0) }
+
+    // 真实流式驱动的 mascot 状态：工具阶段 → Pipeline；生成阶段 → Thinking；空闲 → Idle
+    val mascotState = if (isLoading) {
+        if (aiPhase != null) AirMascotState.Pipeline else AirMascotState.Thinking
+    } else {
+        AirMascotState.Idle
+    }
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
     }
 
-    LaunchedEffect(isLoading, messages.size) {
-        if (wasLoading && !isLoading && messages.isNotEmpty()) {
-            lastCompletedMessageCount = messages.size
-            pipelineMessageCount = null
-        } else if (isLoading) {
-            lastCompletedMessageCount = null
-        }
-        wasLoading = isLoading
-    }
-
-    LaunchedEffect(receivingMessageCount) {
-        if (receivingMessageCount != null) {
-            delay(360)
-            receivingMessageCount = null
+    // 流式进行中持续滚动到底部（content 增长时）
+    LaunchedEffect(messages.lastOrNull()?.content, isLoading) {
+        if (isLoading && messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.lastIndex)
         }
     }
 
-    LaunchedEffect(isLoading, receivingMessageCount, messages.size) {
-        pipelineMessageCount = null
-        if (isLoading && receivingMessageCount == null) {
-            delay(900)
-            if (isLoading && receivingMessageCount == null) {
-                pipelineMessageCount = messages.size
-            }
+    // 引用笔记浮动提示：选中数量增加时弹出「已引用：{摘要}」
+    LaunchedEffect(selectedCount) {
+        if (selectedCount > prevSelectedCount) {
+            val note = contextNotes.lastOrNull()
+            val preview = if (note != null) {
+                val p = note.content.trim().replace('\n', ' ')
+                if (p.length > 16) p.take(16) + "…" else p
+            } else "已引用 $selectedCount 篇笔记"
+            scope.launch { snackbarHostState.showSnackbar("已引用：$preview") }
         }
-    }
-
-    LaunchedEffect(lastCompletedMessageCount) {
-        if (lastCompletedMessageCount != null) {
-            delay(650)
-            lastCompletedMessageCount = null
-        }
-    }
-
-    fun markReceiveForNextMessage() {
-        if (!isLoading) {
-            receivingMessageCount = messages.size + 1
-            pipelineMessageCount = null
-            lastCompletedMessageCount = null
-        }
+        prevSelectedCount = selectedCount
     }
 
     if (showNotePicker) {
         NotePickerSheet(
             allIdeas = allIdeas,
             isSelected = viewModel::isNoteSelected,
-            onToggleNote = viewModel::toggleNote,
+            onSelect = { idea ->
+                if (!viewModel.isNoteSelected(idea.id)) {
+                    viewModel.toggleNote(idea)
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                }
+            },
+            selectedCount = selectedCount,
+            onDone = {
+                scope.launch {
+                    viewModel.closeNotePicker()
+                }
+            },
             onDismiss = viewModel::closeNotePicker
         )
     }
@@ -154,13 +169,21 @@ fun AiChatScreen(viewModel: AiChatViewModel = hiltViewModel()) {
         )
     }
 
-    Scaffold(containerColor = MaterialTheme.colorScheme.background) { innerPadding ->
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        snackbarHost = { SnackbarHost(snackbarHostState) }
+    ) { innerPadding ->
         QuietBackground {
+            // 让出悬浮导航栏 + 系统手势条空间
+            val systemBottomPadding = WindowInsets.navigationBars
+                .asPaddingValues()
+                .calculateBottomPadding()
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
                     .imePadding()
+                    .padding(bottom = systemBottomPadding + 88.dp)
             ) {
             LazyColumn(
                 modifier = Modifier.weight(1f),
@@ -172,30 +195,29 @@ fun AiChatScreen(viewModel: AiChatViewModel = hiltViewModel()) {
                     AgentHeader(
                         modelConfig = modelConfig,
                         onOpenModelSheet = { showModelSheet = true },
-                        mascotState = resolveAirMascotState(
-                            isLoading = isLoading,
-                            messageCount = messages.size,
-                            receivingMessageCount = receivingMessageCount,
-                            pipelineMessageCount = pipelineMessageCount,
-                            lastCompletedMessageCount = lastCompletedMessageCount
-                        )
+                        mascotState = mascotState
                     )
+                }
+                if (aiPhase != null) {
+                    item {
+                        Text(
+                            aiPhase ?: "",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                        )
+                    }
                 }
                 if (messages.isEmpty()) {
                     item {
-                        AirEmptySpace(
-                            mascotState = resolveAirMascotState(
-                                isLoading = isLoading,
-                                messageCount = messages.size,
-                                receivingMessageCount = receivingMessageCount,
-                                pipelineMessageCount = pipelineMessageCount,
-                                lastCompletedMessageCount = lastCompletedMessageCount
-                            )
-                        )
+                        AirEmptySpace(mascotState = mascotState)
                     }
                 } else {
-                    itemsIndexed(messages) { _, message ->
-                        ChatBubble(message)
+                    itemsIndexed(messages) { index, message ->
+                        val isLastAssistant = index == messages.lastIndex &&
+                            message.role == "assistant" &&
+                            isLoading
+                        ChatBubble(message, isStreaming = isLastAssistant)
                     }
                 }
             }
@@ -205,13 +227,11 @@ fun AiChatScreen(viewModel: AiChatViewModel = hiltViewModel()) {
                 isLoading = isLoading,
                 contextNotes = contextNotes,
                 contextChips = contextChips,
+                selectedCount = selectedCount,
                 onInputChange = viewModel::onInputChange,
                 onOpenNotePicker = viewModel::openNotePicker,
-                onRemoveContextNote = viewModel::removeContextNote,
-                onSend = {
-                    markReceiveForNextMessage()
-                    viewModel.send()
-                }
+                onRemoveContextNote = viewModel::removeSelectedNote,
+                onSend = { viewModel.send() }
             )
             }
         }
@@ -254,7 +274,7 @@ private fun AirEmptySpace(mascotState: AirMascotState) {
 }
 
 @Composable
-private fun ChatBubble(message: ChatMessage) {
+private fun ChatBubble(message: ChatMessage, isStreaming: Boolean = false) {
     val isUser = message.role == "user"
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -275,13 +295,44 @@ private fun ChatBubble(message: ChatMessage) {
             border = if (isUser) null else BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant),
             modifier = Modifier.widthIn(max = 320.dp)
         ) {
-            Text(
-                message.content,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                style = MaterialTheme.typography.bodyMedium
-            )
+            if (isUser) {
+                Text(
+                    message.content,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            } else {
+                Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+                    MarkdownText(
+                        markdown = message.content,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (isStreaming) {
+                        StreamingCursor()
+                    }
+                }
+            }
         }
     }
+}
+
+@Composable
+private fun StreamingCursor() {
+    val transition = rememberInfiniteTransition(label = "streaming-cursor")
+    val alpha by transition.animateFloat(
+        initialValue = 0.2f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 480),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "cursor-alpha"
+    )
+    Text(
+        "▍",
+        color = MaterialTheme.colorScheme.primary.copy(alpha = alpha),
+        style = MaterialTheme.typography.bodyMedium
+    )
 }
 
 @Composable
@@ -290,6 +341,7 @@ private fun ComposerBar(
     isLoading: Boolean,
     contextNotes: List<IdeaEntity>,
     contextChips: List<String>,
+    selectedCount: Int,
     onInputChange: (String) -> Unit,
     onOpenNotePicker: () -> Unit,
     onRemoveContextNote: (String) -> Unit,
@@ -333,7 +385,8 @@ private fun ComposerBar(
                                     contentDescription = "移除引用",
                                     modifier = Modifier.size(16.dp)
                                 )
-                            }
+                            },
+                            modifier = Modifier.animateContentSize()
                         )
                     }
                 }
@@ -343,15 +396,25 @@ private fun ComposerBar(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 IconButton(onClick = onOpenNotePicker) {
-                    Icon(
-                        Icons.Default.AttachFile,
-                        contentDescription = "引用笔记",
-                        tint = if (contextNotes.isEmpty()) {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        } else {
-                            MaterialTheme.colorScheme.primary
+                    if (selectedCount > 0) {
+                        BadgedBox(
+                            badge = {
+                                Badge { Text("$selectedCount") }
+                            }
+                        ) {
+                            Icon(
+                                Icons.Default.AttachFile,
+                                contentDescription = "引用笔记",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
                         }
-                    )
+                    } else {
+                        Icon(
+                            Icons.Default.AttachFile,
+                            contentDescription = "引用笔记",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 TextField(
                     value = input,
@@ -521,18 +584,38 @@ private fun AgentModelSheet(
 private fun NotePickerSheet(
     allIdeas: List<IdeaEntity>,
     isSelected: (String) -> Boolean,
-    onToggleNote: (IdeaEntity) -> Unit,
+    onSelect: (IdeaEntity) -> Unit,
+    selectedCount: Int,
+    onDone: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val primaryContainer = MaterialTheme.colorScheme.primaryContainer
+    val onPrimaryContainer = MaterialTheme.colorScheme.onPrimaryContainer
+    val primary = MaterialTheme.colorScheme.primary
+    val surface = MaterialTheme.colorScheme.surface
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surface
+        containerColor = surface
     ) {
-        Text(
-            "引用笔记",
-            style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                "引用笔记",
+                style = MaterialTheme.typography.titleLarge
+            )
+            TextButton(
+                onClick = onDone,
+                enabled = selectedCount > 0
+            ) {
+                Text("完成($selectedCount)")
+            }
+        }
         if (allIdeas.isEmpty()) {
             Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
                 Text("还没有可引用的笔记")
@@ -547,7 +630,9 @@ private fun NotePickerSheet(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onToggleNote(idea) }
+                            .animateContentSize()
+                            .background(if (selected) primaryContainer.copy(alpha = 0.45f) else surface)
+                            .clickable { onSelect(idea) }
                             .padding(horizontal = 20.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -557,16 +642,22 @@ private fun NotePickerSheet(
                                 idea.summary.ifBlank { idea.content },
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
-                                style = MaterialTheme.typography.bodyLarge
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = if (selected) onPrimaryContainer else MaterialTheme.colorScheme.onSurface
                             )
                             Text(
                                 idea.category.ifBlank { "未分类" },
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = if (selected) onPrimaryContainer.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         if (selected) {
-                            Icon(Icons.Default.Check, contentDescription = "已选择", tint = MaterialTheme.colorScheme.primary)
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = "已选择",
+                                tint = primary,
+                                modifier = Modifier.size(22.dp)
+                            )
                         }
                     }
                 }

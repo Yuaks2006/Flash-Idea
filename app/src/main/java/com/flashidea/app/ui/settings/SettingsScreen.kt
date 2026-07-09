@@ -14,6 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Gesture
@@ -68,6 +69,7 @@ fun SettingsScreen(
 ) {
     val allIdeas by viewModel.allIdeas.collectAsState()
     val modelConfig by viewModel.modelConfig.collectAsState()
+    val autoIncubate by viewModel.autoIncubate.collectAsState()
     val modelSnapshot = viewModel.modelSnapshot
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -216,6 +218,14 @@ fun SettingsScreen(
                 QuietRow("下拉磁贴", value = "记录入口", icon = Icons.Default.TouchApp)
                 QuietDivider()
                 QuietRow("系统分享", value = "文本入口", icon = Icons.Default.Share)
+                QuietDivider()
+                ToggleRow(
+                    icon = Icons.Default.AutoAwesome,
+                    title = "自动孵化",
+                    value = if (autoIncubate) "保存后自动孵化" else "关闭",
+                    checked = autoIncubate,
+                    onClick = { viewModel.setAutoIncubate(!autoIncubate) }
+                )
                 QuietDivider()
                 QuietRow("导出", value = "${allIdeas.size} 条", icon = Icons.Default.FileDownload) {
                     showExportSheet = true
